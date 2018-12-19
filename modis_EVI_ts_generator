@@ -1,0 +1,48 @@
+// Load imagery.
+
+var dataset = ee.ImageCollection('MODIS/MCD43A4_006_EVI')
+              .filter(ee.Filter.date('2015-01-01', '2017-12-31'));
+print('Size of Landsat collection', dataset.size()); 
+
+// Load an Earth Engine table.
+var blocks = ee.FeatureCollection('users/navidj1989/basin_shapes_4326_single_part');
+print('# of Watersheds', blocks.size()); 
+Map.addLayer(blocks, {color: 'gray'}, 'blocks');
+
+// Collect block, image, value triplets.
+var triplets = dataset.map(function(image) {
+  return image.select('EVI').reduceRegions({
+    collection: blocks.select(['USGS_id']), 
+    reducer: ee.Reducer.mean()
+  }).filter(ee.Filter.neq('mean', null))
+    .map(function(f) { 
+      return f.set('imageId', image.id());
+    });
+}).flatten();
+print(triplets.first());
+
+
+var format = function(table, rowId, colId) {
+
+  var rows = table.distinct(rowId); 
+  var joined = ee.Join.saveAll('matches').apply({
+    primary: rows, 
+    secondary: table, 
+    condition: ee.Filter.equals({
+      leftField: rowId, 
+      rightField: rowId
+    })
+  });
+
+  return joined.map(function(row) {
+      var values = ee.List(row.get('matches'))
+        .map(function(feature) {
+          feature = ee.Feature(feature);
+          return [feature.get(colId), feature.get('mean')];
+        });
+      return row.select([rowId]).set(ee.Dictionary(values.flatten()));
+    });
+};
+var table1 = format(triplets, 'imageId', 'USGS_id');
+// // print(table1);
+Export.table.toDrive(table1)
